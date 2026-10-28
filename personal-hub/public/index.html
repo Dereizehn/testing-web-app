@@ -1,0 +1,771 @@
+<!DOCTYPE html>
+<html lang="id" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Personal Hub — Keuangan, Google Tasks & Notion/Obsidian Notes</title>
+  <!-- Tailwind CSS & React via CDN for zero-install instant loading -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: { 500: '#6366f1', 600: '#4f46e5' }
+          }
+        }
+      }
+    }
+  </script>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    body { background-color: #020617; color: #f8fafc; font-family: ui-sans-serif, system-ui, sans-serif; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.6); }
+    ::-webkit-scrollbar-thumb { background: rgba(71, 85, 105, 0.6); border-radius: 9999px; }
+  </style>
+</head>
+<body class="min-h-screen">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useMemo, useRef } = React;
+
+    const formatIDR = (val) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(val || 0);
+
+    const EMOJI_OPTIONS = ["📝", "🚀", "💰", "🕯️", "💡", "📚", "🎯", "🧠", "⚡", "🗂️", "🎮", "🛠️"];
+
+    function App() {
+      const [activeTab, setActiveTab] = useState("dashboard");
+      const [loading, setLoading] = useState(true);
+      const [finance, setFinance] = useState([]);
+      const [tasks, setTasks] = useState([]);
+      const [notes, setNotes] = useState([]);
+      const [monthlyBudget, setMonthlyBudget] = useState(7500000);
+      const [editingBudget, setEditingBudget] = useState(false);
+      const [budgetInput, setBudgetInput] = useState("7500000");
+      const [searchQuery, setSearchQuery] = useState("");
+
+      // Finance State
+      const [financeFilter, setFinanceFilter] = useState("all");
+      const [finTitle, setFinTitle] = useState("");
+      const [finAmount, setFinAmount] = useState("");
+      const [finType, setFinType] = useState("expense");
+      const [finCategory, setFinCategory] = useState("Kebutuhan Pokok");
+      const [finPriority, setFinPriority] = useState("medium");
+      const [finDueDate, setFinDueDate] = useState("");
+
+      // Tasks State
+      const [selectedTaskList, setSelectedTaskList] = useState("ALL");
+      const [taskTitle, setTaskTitle] = useState("");
+      const [taskDetails, setTaskDetails] = useState("");
+      const [taskListName, setTaskListName] = useState("Tugas Utama");
+      const [taskDueDate, setTaskDueDate] = useState("");
+      const [newSubtaskInputs, setNewSubtaskInputs] = useState({});
+
+      // Notes State
+      const [selectedNoteId, setSelectedNoteId] = useState(null);
+      const [noteViewMode, setNoteViewMode] = useState("split");
+      const [selectedFolder, setSelectedFolder] = useState("ALL");
+      const canvasRef = useRef(null);
+
+      const fetchHubData = async () => {
+        try {
+          const res = await fetch("/api/hub");
+          const json = await res.json();
+          if (json.finance) setFinance(json.finance);
+          if (json.tasks) setTasks(json.tasks);
+          if (json.notes) {
+            setNotes(json.notes);
+            if (selectedNoteId === null && json.notes.length > 0) setSelectedNoteId(json.notes[0].id);
+          }
+          if (json.monthlyBudget) {
+            setMonthlyBudget(json.monthlyBudget);
+            setBudgetInput(String(json.monthlyBudget));
+          }
+        } catch (e) {
+          console.error("API error, fallback to local test state:", e);
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      useEffect(() => {
+        fetchHubData();
+      }, []);
+
+      // Financial Stats
+      const financeStats = useMemo(() => {
+        const totalExpense = finance.filter(f => f.type === 'expense').reduce((acc, f) => acc + Number(f.amount), 0);
+        const pendingMustPay = finance.filter(f => f.type === 'must_pay' && f.status === 'pending').reduce((acc, f) => acc + Number(f.amount), 0);
+        const totalWantToBuy = finance.filter(f => f.type === 'want_to_buy' && f.status === 'saved').reduce((acc, f) => acc + Number(f.amount), 0);
+        const remainingBudget = monthlyBudget - totalExpense - pendingMustPay;
+        return { totalExpense, pendingMustPay, totalWantToBuy, remainingBudget };
+      }, [finance, monthlyBudget]);
+
+      // Budget Save
+      const saveBudget = async () => {
+        const val = Number(budgetInput) || 0;
+        setMonthlyBudget(val);
+        setEditingBudget(false);
+        await fetch("/api/hub", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ entity: "budget", data: { monthlyBudget: val } })
+        });
+      };
+
+      // Add Finance
+      const handleAddFinance = async (e) => {
+        e.preventDefault();
+        if (!finTitle.trim()) return;
+        await fetch("/api/hub", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            entity: "finance",
+            data: {
+              title: finTitle.trim(),
+              amount: Number(finAmount) || 0,
+              type: finType,
+              category: finCategory.trim() || "Umum",
+              status: finType === 'expense' ? 'paid' : finType === 'must_pay' ? 'pending' : 'saved',
+              priority: finPriority,
+              due_date: finDueDate || null,
+              notes: ""
+            }
+          })
+        });
+        setFinTitle(""); setFinAmount("");
+        fetchHubData();
+      };
+
+      const handleConvertFinanceToExpense = async (item) => {
+        await fetch("/api/hub", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ entity: "finance", id: item.id, data: { convertToExpense: true, type: item.type } })
+        });
+        fetchHubData();
+      };
+
+      const handleDeleteEntity = async (entity, id) => {
+        await fetch(`/api/hub?entity=${entity}&id=${id}`, { method: "DELETE" });
+        if (entity === "note" && selectedNoteId === id) {
+          const rest = notes.filter(n => n.id !== id);
+          setSelectedNoteId(rest.length > 0 ? rest[0].id : null);
+        }
+        fetchHubData();
+      };
+
+      // Tasks
+      const handleAddTask = async (e) => {
+        e.preventDefault();
+        if (!taskTitle.trim()) return;
+        await fetch("/api/hub", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            entity: "task",
+            data: {
+              title: taskTitle.trim(),
+              details: taskDetails.trim(),
+              list_name: taskListName.trim() || "Tugas Utama",
+              due_date: taskDueDate || null,
+              priority: "medium",
+              completed: false,
+              starred: false,
+              subtasks: []
+            }
+          })
+        });
+        setTaskTitle(""); setTaskDetails("");
+        fetchHubData();
+      };
+
+      const handleUpdateTask = async (task, updates) => {
+        const merged = { ...task, ...updates };
+        await fetch("/api/hub", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ entity: "task", id: task.id, data: merged })
+        });
+        fetchHubData();
+      };
+
+      const handleAddSubtask = async (task) => {
+        const text = (newSubtaskInputs[task.id] || "").trim();
+        if (!text) return;
+        const current = JSON.parse(task.subtasks || "[]");
+        const updated = [...current, { id: `st-${Date.now()}`, title: text, done: false }];
+        setNewSubtaskInputs(prev => ({ ...prev, [task.id]: "" }));
+        handleUpdateTask(task, { subtasks: JSON.stringify(updated) });
+      };
+
+      const handleToggleSubtask = async (task, subId) => {
+        const current = JSON.parse(task.subtasks || "[]");
+        const updated = current.map(s => s.id === subId ? { ...s, done: !s.done } : s);
+        handleUpdateTask(task, { subtasks: JSON.stringify(updated) });
+      };
+
+      // Notes
+      const selectedNote = useMemo(() => notes.find(n => n.id === selectedNoteId) || null, [notes, selectedNoteId]);
+
+      const handleCreateNote = async (title = "Catatan Baru") => {
+        const res = await fetch("/api/hub", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            entity: "note",
+            data: {
+              title,
+              icon: "📝",
+              folder: selectedFolder === "ALL" ? "Workspace" : selectedFolder,
+              content: `# ${title}\n\nMulai menulis catatan atau tautkan dengan [[Panduan Personal Hub]]...\n`,
+              tags: ["catatan"],
+              pinned: false
+            }
+          })
+        });
+        const json = await res.json();
+        await fetchHubData();
+        if (json.id) {
+          setSelectedNoteId(json.id);
+          setActiveTab("notes");
+        }
+      };
+
+      const handleUpdateNote = async (updates) => {
+        if (!selectedNote) return;
+        const updated = { ...selectedNote, ...updates };
+        setNotes(prev => prev.map(n => n.id === selectedNote.id ? updated : n));
+        await fetch("/api/hub", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ entity: "note", id: selectedNote.id, data: updated })
+        });
+      };
+
+      const extractWikiLinks = (text) => {
+        const matches = (text || "").matchAll(/\[\[([^\]]+)\]\]/g);
+        return Array.from(matches, m => m[1].trim());
+      };
+
+      const backlinks = useMemo(() => {
+        if (!selectedNote) return [];
+        const target = selectedNote.title.toLowerCase();
+        return notes.filter(n => n.id !== selectedNote.id && extractWikiLinks(n.content).some(l => l.toLowerCase() === target));
+      }, [notes, selectedNote]);
+
+      // Obsidian Graph View Canvas
+      useEffect(() => {
+        if (activeTab !== "notes" || noteViewMode !== "graph" || !canvasRef.current) return;
+        const canvas = canvasRef.current;
+        const ctx = canvas.getContext("2d");
+        const w = canvas.width, h = canvas.height;
+        ctx.clearRect(0, 0, w, h);
+
+        const cx = w / 2, cy = h / 2;
+        const radius = Math.min(w, h) * 0.35;
+        const positions = notes.map((n, i) => {
+          const angle = (i / Math.max(notes.length, 1)) * Math.PI * 2 - Math.PI / 2;
+          return { note: n, x: cx + Math.cos(angle) * radius, y: cy + Math.sin(angle) * radius };
+        });
+
+        // Edges
+        ctx.lineWidth = 1.5;
+        positions.forEach(src => {
+          const links = extractWikiLinks(src.note.content);
+          links.forEach(l => {
+            const tgt = positions.find(t => t.note.title.toLowerCase() === l.toLowerCase());
+            if (tgt) {
+              ctx.strokeStyle = "rgba(99, 102, 241, 0.6)";
+              ctx.beginPath();
+              ctx.moveTo(src.x, src.y);
+              ctx.lineTo(tgt.x, tgt.y);
+              ctx.stroke();
+            }
+          });
+        });
+
+        // Nodes
+        positions.forEach(({ note, x, y }) => {
+          const isSel = note.id === selectedNoteId;
+          ctx.beginPath();
+          ctx.arc(x, y, isSel ? 22 : 16, 0, Math.PI * 2);
+          ctx.fillStyle = isSel ? "#6366f1" : "#1e293b";
+          ctx.fill();
+          ctx.lineWidth = 2;
+          ctx.strokeStyle = isSel ? "#a5b4fc" : "#475569";
+          ctx.stroke();
+
+          ctx.font = "14px sans-serif";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(note.icon || "📝", x, y);
+
+          ctx.font = isSel ? "bold 12px sans-serif" : "12px sans-serif";
+          ctx.fillStyle = isSel ? "#e0e7ff" : "#cbd5e1";
+          ctx.fillText(note.title, x, y + 30);
+        });
+      }, [activeTab, noteViewMode, notes, selectedNoteId]);
+
+      // Render Markdown helper
+      const renderMarkdown = (text) => {
+        const lines = (text || "").split("\n");
+        return lines.map((line, idx) => {
+          if (line.startsWith("# ")) return <h1 key={idx} className="text-2xl font-bold text-white mt-3 mb-2 border-b border-slate-800 pb-2">{line.slice(2)}</h1>;
+          if (line.startsWith("## ")) return <h2 key={idx} className="text-lg font-semibold text-indigo-300 mt-4 mb-1.5">{line.slice(3)}</h2>;
+          if (line.startsWith("> ")) return <div key={idx} className="my-2 border-l-4 border-indigo-500 bg-indigo-950/30 px-3.5 py-2 text-sm text-indigo-200 rounded">{line.slice(2)}</div>;
+          if (line.startsWith("- [ ] ") || line.startsWith("- [x] ")) {
+            const checked = line.startsWith("- [x] ");
+            const lbl = line.slice(6);
+            return (
+              <label key={idx} className="flex items-center gap-2 py-1 text-sm cursor-pointer">
+                <input type="checkbox" checked={checked} onChange={() => {
+                  const copy = [...lines];
+                  copy[idx] = checked ? `- [ ] ${lbl}` : `- [x] ${lbl}`;
+                  handleUpdateNote({ content: copy.join("\n") });
+                }} className="rounded bg-slate-800 text-indigo-500" />
+                <span className={checked ? "line-through text-slate-500" : "text-slate-200"}>{lbl}</span>
+              </label>
+            );
+          }
+          const parts = line.split(/(\[\[[^\]]+\]\])/g);
+          return (
+            <p key={idx} className="text-sm text-slate-300 leading-relaxed my-1">
+              {parts.map((p, pIdx) => {
+                if (p.startsWith("[[") && p.endsWith("]]")) {
+                  const tTitle = p.slice(2, -2);
+                  const exists = notes.find(n => n.title.toLowerCase() === tTitle.toLowerCase());
+                  return (
+                    <button key={pIdx} onClick={() => {
+                      if (exists) { setSelectedNoteId(exists.id); if (noteViewMode === 'graph') setNoteViewMode('split'); }
+                      else { handleCreateNote(tTitle); }
+                    }} className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium bg-indigo-500/20 text-indigo-300 hover:bg-indigo-500/30 border border-indigo-500/30 mx-0.5">
+                      🔗 {tTitle}
+                    </button>
+                  );
+                }
+                return <span key={pIdx}>{p}</span>;
+              })}
+            </p>
+          );
+        });
+      };
+
+      const taskLists = useMemo(() => {
+        const set = new Set(["Tugas Utama", "Keuangan", "Proyek Game"]);
+        tasks.forEach(t => set.add(t.list_name));
+        return Array.from(set);
+      }, [tasks]);
+
+      const noteFolders = useMemo(() => {
+        const set = new Set(["Workspace", "Keuangan", "Game Design", "Inbox"]);
+        notes.forEach(n => set.add(n.folder));
+        return Array.from(set);
+      }, [notes]);
+
+      return (
+        <div className="min-h-screen flex flex-col md:flex-row bg-slate-950 text-slate-100">
+          {/* Sidebar */}
+          <aside className="w-full md:w-64 bg-slate-900/90 border-r border-slate-800 flex flex-col justify-between p-4 shrink-0">
+            <div>
+              <div className="flex items-center gap-3 px-2 py-3 mb-4">
+                <div className="h-9 w-9 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center font-bold text-lg text-white shadow-lg shadow-indigo-500/20">
+                  ✦
+                </div>
+                <div>
+                  <h1 className="font-bold text-base tracking-tight text-white">Personal Hub</h1>
+                  <p className="text-[11px] text-slate-400">Finance • Tasks • Notes (SQLite)</p>
+                </div>
+              </div>
+
+              <nav className="space-y-1.5">
+                {[
+                  { id: 'dashboard', label: 'Ringkasan Hub', icon: '📊', count: null },
+                  { id: 'finance', label: 'Keuangan Pribadi', icon: '💰', count: finance.length },
+                  { id: 'tasks', label: 'Google Tasks', icon: '✅', count: tasks.filter(t => !t.completed).length },
+                  { id: 'notes', label: 'Notes (Notion/Obsidian)', icon: '📝', count: notes.length }
+                ].map(tab => (
+                  <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition ${activeTab === tab.id ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20' : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'}`}>
+                    <span className="flex items-center gap-2.5"><span>{tab.icon}</span> {tab.label}</span>
+                    {tab.count !== null && <span className="text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-300">{tab.count}</span>}
+                  </button>
+                ))}
+              </nav>
+            </div>
+
+            {/* Budget Box */}
+            <div className="mt-6 rounded-xl bg-slate-950/80 border border-slate-800 p-3.5">
+              <div className="flex items-center justify-between text-xs text-slate-400 mb-1">
+                <span>Anggaran Bulanan</span>
+                <button onClick={() => setEditingBudget(!editingBudget)} className="text-indigo-400 hover:underline">{editingBudget ? 'Batal' : 'Ubah'}</button>
+              </div>
+              {editingBudget ? (
+                <div className="flex gap-1.5 mt-1">
+                  <input type="number" value={budgetInput} onChange={e => setBudgetInput(e.target.value)} className="w-full rounded bg-slate-900 border border-slate-700 px-2 py-1 text-xs text-white" />
+                  <button onClick={saveBudget} className="rounded bg-indigo-600 px-2 py-1 text-xs text-white">OK</button>
+                </div>
+              ) : (
+                <p className="text-sm font-bold text-white">{formatIDR(monthlyBudget)}</p>
+              )}
+              <div className="mt-2.5 h-1.5 w-full rounded-full bg-slate-800 overflow-hidden">
+                <div className={`h-full rounded-full ${financeStats.remainingBudget < 0 ? 'bg-rose-500' : 'bg-emerald-500'}`} style={{ width: `${Math.min(100, Math.round(((financeStats.totalExpense + financeStats.pendingMustPay) / Math.max(monthlyBudget, 1)) * 100))}%` }} />
+              </div>
+              <p className="mt-1.5 text-[11px] text-slate-400">Sisa aman: <span className={financeStats.remainingBudget < 0 ? 'text-rose-400 font-semibold' : 'text-emerald-400 font-semibold'}>{formatIDR(financeStats.remainingBudget)}</span></p>
+            </div>
+          </aside>
+
+          {/* Main Area */}
+          <main className="flex-1 p-5 md:p-8 overflow-y-auto">
+            {loading ? (
+              <div className="flex items-center justify-center h-64 text-sm text-slate-400">Memuat database SQLite lokal...</div>
+            ) : activeTab === 'dashboard' ? (
+              /* DASHBOARD */
+              <div className="space-y-6 max-w-6xl mx-auto">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div>
+                    <h2 className="text-2xl font-bold text-white">Ringkasan Personal Hub</h2>
+                    <p className="text-sm text-slate-400">Pengeluaran, Must Paid, Want to Buy, Google Tasks, dan Obsidian Notes.</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button onClick={() => setActiveTab('finance')} className="rounded-lg bg-slate-800 hover:bg-slate-700 px-3.5 py-2 text-xs font-medium text-slate-200">+ Catat Keuangan</button>
+                    <button onClick={() => handleCreateNote("Catatan Harian Baru")} className="rounded-lg bg-indigo-600 hover:bg-indigo-500 px-3.5 py-2 text-xs font-medium text-white">+ Catatan Baru</button>
+                  </div>
+                </div>
+
+                {/* 4 Cards */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                  <div className="rounded-2xl bg-slate-900 border border-slate-800 p-4">
+                    <p className="text-xs text-slate-400 mb-1">💸 Total Pengeluaran</p>
+                    <p className="text-xl font-bold text-white">{formatIDR(financeStats.totalExpense)}</p>
+                  </div>
+                  <div className="rounded-2xl bg-slate-900 border border-amber-500/30 p-4">
+                    <p className="text-xs text-amber-300 mb-1">⚠️ Must Paid (Wajib)</p>
+                    <p className="text-xl font-bold text-amber-300">{formatIDR(financeStats.pendingMustPay)}</p>
+                  </div>
+                  <div className="rounded-2xl bg-slate-900 border border-indigo-500/30 p-4">
+                    <p className="text-xs text-indigo-300 mb-1">🛍️ Want to Buy (Wishlist)</p>
+                    <p className="text-xl font-bold text-indigo-300">{formatIDR(financeStats.totalWantToBuy)}</p>
+                  </div>
+                  <div className="rounded-2xl bg-slate-900 border border-emerald-500/30 p-4">
+                    <p className="text-xs text-emerald-300 mb-1">🛡️ Sisa Anggaran Aman</p>
+                    <p className="text-xl font-bold text-emerald-400">{formatIDR(financeStats.remainingBudget)}</p>
+                  </div>
+                </div>
+
+                {/* 3-Col Preview */}
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                  {/* Must Paid Urgent */}
+                  <div className="rounded-2xl bg-slate-900 border border-slate-800 p-5">
+                    <div className="flex items-center justify-between mb-4">
+                      <h3 className="font-semibold text-sm text-amber-300">⚠️ Tagihan Must Paid Aktif</h3>
+                      <button onClick={() => { setFinanceFilter('must_pay'); setActiveTab('finance'); }} className="text-xs text-indigo-400 hover:underline">Semua →</button>
+                    </div>
+                    <div className="space-y-2.5">
+                      {finance.filter(f => f.type === 'must_pay' && f.status === 'pending').slice(0, 4).map(item => (
+                        <div key={item.id} className="rounded-xl bg-slate-950 border border-slate-800 p-3 flex items-center justify-between gap-2">
+                          <div>
+                            <p className="text-sm font-medium text-slate-200">{item.title}</p>
+                            <p className="text-xs text-slate-400">{formatIDR(item.amount)} • Tempo: {item.due_date || '-'}</p>
+                          </div>
+                          <button onClick={() => handleConvertFinanceToExpense(item)} className="rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 px-2 py-1 text-xs text-emerald-300">Lunasi</button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Tasks */}
+                  <div className="rounded-2xl bg-slate-900 border border-slate-800 p-5">
+                    <div className="flex items-center justify-between mb-4">
+                      <h3 className="font-semibold text-sm text-indigo-300">✅ Google Tasks Terdekat</h3>
+                      <button onClick={() => setActiveTab('tasks')} className="text-xs text-indigo-400 hover:underline">Buka Tasks →</button>
+                    </div>
+                    <div className="space-y-2.5">
+                      {tasks.filter(t => !t.completed).slice(0, 4).map(task => (
+                        <div key={task.id} className="rounded-xl bg-slate-950 border border-slate-800 p-3 flex items-start gap-2.5">
+                          <button onClick={() => handleUpdateTask(task, { completed: 1 })} className="mt-0.5 text-slate-400 hover:text-indigo-400">⭕</button>
+                          <div>
+                            <p className="text-sm font-medium text-slate-200">{task.title}</p>
+                            <p className="text-[11px] text-slate-400">{task.list_name} {task.due_date ? `• 📅 ${task.due_date}` : ''}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Notes */}
+                  <div className="rounded-2xl bg-slate-900 border border-slate-800 p-5">
+                    <div className="flex items-center justify-between mb-4">
+                      <h3 className="font-semibold text-sm text-violet-300">📌 Catatan Pilihan (Notes)</h3>
+                      <button onClick={() => setActiveTab('notes')} className="text-xs text-indigo-400 hover:underline">Buka Vault →</button>
+                    </div>
+                    <div className="space-y-2.5">
+                      {notes.slice(0, 4).map(note => (
+                        <button key={note.id} onClick={() => { setSelectedNoteId(note.id); setActiveTab('notes'); }} className="w-full text-left rounded-xl bg-slate-950 hover:bg-slate-900 border border-slate-800 p-3 flex items-start gap-3">
+                          <span className="text-xl">{note.icon || '📝'}</span>
+                          <div>
+                            <p className="text-sm font-medium text-slate-200">{note.title}</p>
+                            <p className="text-xs text-slate-400">{note.folder} • {extractWikiLinks(note.content).length} wiki-links</p>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : activeTab === 'finance' ? (
+              /* KEUANGAN */
+              <div className="space-y-6 max-w-6xl mx-auto">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div>
+                    <h2 className="text-2xl font-bold text-white">Manajemen Keuangan</h2>
+                    <p className="text-sm text-slate-400">Pengeluaran harian, Must Paid (wajib), dan Want to Buy (wishlist).</p>
+                  </div>
+                  <div className="flex gap-1.5 bg-slate-900 p-1 rounded-xl border border-slate-800">
+                    {[{ id: 'all', label: 'Semua' }, { id: 'expense', label: '💸 Pengeluaran' }, { id: 'must_pay', label: '⚠️ Must Paid' }, { id: 'want_to_buy', label: '🛍️ Want to Buy' }].map(t => (
+                      <button key={t.id} onClick={() => setFinanceFilter(t.id)} className={`px-3 py-1.5 rounded-lg text-xs font-medium ${financeFilter === t.id ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'}`}>{t.label}</button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Form */}
+                <form onSubmit={handleAddFinance} className="rounded-2xl bg-slate-900 border border-slate-800 p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
+                  <input type="text" required value={finTitle} onChange={e => setFinTitle(e.target.value)} placeholder="Nama Transaksi / Barang" className="sm:col-span-2 rounded-lg bg-slate-950 border border-slate-800 px-3 py-2 text-xs text-white" />
+                  <input type="number" required value={finAmount} onChange={e => setFinAmount(e.target.value)} placeholder="Nominal (Rp)" className="rounded-lg bg-slate-950 border border-slate-800 px-3 py-2 text-xs text-white" />
+                  <select value={finType} onChange={e => setFinType(e.target.value)} className="rounded-lg bg-slate-950 border border-slate-800 px-3 py-2 text-xs text-white">
+                    <option value="expense">💸 Pengeluaran</option>
+                    <option value="must_pay">⚠️ Must Paid (Wajib)</option>
+                    <option value="want_to_buy">🛍️ Want to Buy (Wishlist)</option>
+                  </select>
+                  <input type="date" value={finDueDate} onChange={e => setFinDueDate(e.target.value)} className="rounded-lg bg-slate-950 border border-slate-800 px-2 py-2 text-xs text-white" />
+                  <button type="submit" className="rounded-lg bg-indigo-600 hover:bg-indigo-500 px-4 py-2 text-xs font-semibold text-white">+ Simpan</button>
+                </form>
+
+                {/* 3 Columns */}
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+                  {/* Pengeluaran */}
+                  {(financeFilter === 'all' || financeFilter === 'expense') && (
+                    <div className="rounded-2xl bg-slate-900 border border-slate-800 p-4">
+                      <div className="flex justify-between pb-3 mb-3 border-b border-slate-800">
+                        <h3 className="font-semibold text-sm text-rose-300">💸 Pengeluaran</h3>
+                        <span className="text-xs font-bold text-rose-400">{formatIDR(financeStats.totalExpense)}</span>
+                      </div>
+                      <div className="space-y-2">
+                        {finance.filter(f => f.type === 'expense').map(item => (
+                          <div key={item.id} className="rounded-xl bg-slate-950 border border-slate-800 p-3 flex justify-between items-center">
+                            <div>
+                              <p className="text-sm font-medium text-slate-200">{item.title}</p>
+                              <p className="text-xs text-rose-400 font-semibold">{formatIDR(item.amount)} <span className="text-slate-500 font-normal">• {item.category}</span></p>
+                            </div>
+                            <button onClick={() => handleDeleteEntity('finance', item.id)} className="text-slate-500 hover:text-rose-400 text-xs">🗑️</button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Must Paid */}
+                  {(financeFilter === 'all' || financeFilter === 'must_pay') && (
+                    <div className="rounded-2xl bg-slate-900 border border-amber-500/30 p-4">
+                      <div className="flex justify-between pb-3 mb-3 border-b border-slate-800">
+                        <h3 className="font-semibold text-sm text-amber-300">⚠️ Must Paid (Wajib)</h3>
+                        <span className="text-xs font-bold text-amber-300">{formatIDR(financeStats.pendingMustPay)}</span>
+                      </div>
+                      <div className="space-y-2">
+                        {finance.filter(f => f.type === 'must_pay').map(item => (
+                          <div key={item.id} className={`rounded-xl border p-3 flex justify-between items-center ${item.status === 'paid' ? 'bg-slate-950/40 border-slate-800 opacity-60' : 'bg-slate-950 border-amber-500/30'}`}>
+                            <div>
+                              <p className={`text-sm font-medium ${item.status === 'paid' ? 'line-through text-slate-400' : 'text-white'}`}>{item.title}</p>
+                              <p className="text-xs text-amber-300 font-semibold">{formatIDR(item.amount)} <span className="text-slate-500 font-normal">• Jatuh tempo: {item.due_date || '-'}</span></p>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              {item.status === 'pending' && <button onClick={() => handleConvertFinanceToExpense(item)} className="rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-1 text-xs">Lunasi</button>}
+                              <button onClick={() => handleDeleteEntity('finance', item.id)} className="text-slate-500 hover:text-rose-400 text-xs">🗑️</button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Want to Buy */}
+                  {(financeFilter === 'all' || financeFilter === 'want_to_buy') && (
+                    <div className="rounded-2xl bg-slate-900 border border-indigo-500/30 p-4">
+                      <div className="flex justify-between pb-3 mb-3 border-b border-slate-800">
+                        <h3 className="font-semibold text-sm text-indigo-300">🛍️ Want to Buy (Wishlist)</h3>
+                        <span className="text-xs font-bold text-indigo-300">{formatIDR(financeStats.totalWantToBuy)}</span>
+                      </div>
+                      <div className="space-y-2">
+                        {finance.filter(f => f.type === 'want_to_buy').map(item => (
+                          <div key={item.id} className={`rounded-xl border p-3 flex justify-between items-center ${item.status === 'bought' ? 'bg-slate-950/40 border-slate-800 opacity-60' : 'bg-slate-950 border-indigo-500/30'}`}>
+                            <div>
+                              <p className={`text-sm font-medium ${item.status === 'bought' ? 'line-through text-slate-400' : 'text-white'}`}>{item.title}</p>
+                              <p className="text-xs text-indigo-300 font-semibold">{formatIDR(item.amount)} <span className="text-slate-500 font-normal">• Target: {item.due_date || '-'}</span></p>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              {item.status === 'saved' && <button onClick={() => handleConvertFinanceToExpense(item)} className="rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 px-2 py-1 text-xs">Beli</button>}
+                              <button onClick={() => handleDeleteEntity('finance', item.id)} className="text-slate-500 hover:text-rose-400 text-xs">🗑️</button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : activeTab === 'tasks' ? (
+              /* TASKS */
+              <div className="space-y-6 max-w-5xl mx-auto">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div>
+                    <h2 className="text-2xl font-bold text-white">Google Tasks & Penjadwalan</h2>
+                    <p className="text-sm text-slate-400">Daftar tugas, sub-tasks bertingkat, dan pengingat tanggal.</p>
+                  </div>
+                  <div className="flex flex-wrap gap-1 bg-slate-900 p-1 rounded-xl border border-slate-800">
+                    <button onClick={() => setSelectedTaskList('ALL')} className={`px-3 py-1.5 rounded-lg text-xs ${selectedTaskList === 'ALL' ? 'bg-indigo-600 text-white' : 'text-slate-400'}`}>Semua</button>
+                    <button onClick={() => setSelectedTaskList('STARRED')} className={`px-3 py-1.5 rounded-lg text-xs ${selectedTaskList === 'STARRED' ? 'bg-amber-500 text-black font-semibold' : 'text-slate-400'}`}>⭐ Starred</button>
+                    {taskLists.map(l => (
+                      <button key={l} onClick={() => setSelectedTaskList(l)} className={`px-3 py-1.5 rounded-lg text-xs ${selectedTaskList === l ? 'bg-indigo-600 text-white' : 'text-slate-400'}`}>{l}</button>
+                    ))}
+                  </div>
+                </div>
+
+                <form onSubmit={handleAddTask} className="rounded-2xl bg-slate-900 border border-slate-800 p-3 grid grid-cols-1 sm:grid-cols-5 gap-2">
+                  <input type="text" required value={taskTitle} onChange={e => setTaskTitle(e.target.value)} placeholder="+ Tugas baru..." className="sm:col-span-2 rounded-lg bg-slate-950 border border-slate-800 px-3 py-2 text-xs text-white" />
+                  <input type="text" value={taskListName} onChange={e => setTaskListName(e.target.value)} placeholder="Nama List (mis. Keuangan)" className="rounded-lg bg-slate-950 border border-slate-800 px-3 py-2 text-xs text-white" />
+                  <input type="date" value={taskDueDate} onChange={e => setTaskDueDate(e.target.value)} className="rounded-lg bg-slate-950 border border-slate-800 px-2 py-2 text-xs text-white" />
+                  <button type="submit" className="rounded-lg bg-indigo-600 hover:bg-indigo-500 px-4 py-2 text-xs font-semibold text-white">+ Tambah</button>
+                </form>
+
+                <div className="space-y-3">
+                  {tasks.filter(t => {
+                    if (selectedTaskList === 'STARRED') return t.starred;
+                    if (selectedTaskList !== 'ALL') return t.list_name === selectedTaskList;
+                    return true;
+                  }).map(task => {
+                    const subtasks = JSON.parse(task.subtasks || "[]");
+                    return (
+                      <div key={task.id} className={`rounded-2xl border p-4 ${task.completed ? 'bg-slate-900/40 border-slate-800 opacity-60' : 'bg-slate-900 border-slate-800'}`}>
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex items-start gap-3 flex-1">
+                            <button onClick={() => handleUpdateTask(task, { completed: task.completed ? 0 : 1 })} className="mt-0.5 text-indigo-400">
+                              {task.completed ? '✅' : '⭕'}
+                            </button>
+                            <div className="flex-1">
+                              <p className={`text-sm font-semibold ${task.completed ? 'line-through text-slate-400' : 'text-white'}`}>{task.title}</p>
+                              <div className="flex gap-2 mt-1 text-[11px] text-slate-400">
+                                <span className="bg-slate-800 px-2 py-0.5 rounded text-indigo-300">{task.list_name}</span>
+                                {task.due_date && <span>📅 {task.due_date}</span>}
+                              </div>
+
+                              {/* Subtasks */}
+                              <div className="mt-3 pl-2 border-l-2 border-slate-800 space-y-1">
+                                {subtasks.map(st => (
+                                  <label key={st.id} className="flex items-center gap-2 text-xs cursor-pointer">
+                                    <input type="checkbox" checked={st.done} onChange={() => handleToggleSubtask(task, st.id)} className="rounded bg-slate-900 text-indigo-500" />
+                                    <span className={st.done ? 'line-through text-slate-500' : 'text-slate-300'}>{st.title}</span>
+                                  </label>
+                                ))}
+                                <div className="flex items-center gap-1.5 pt-1">
+                                  <input type="text" value={newSubtaskInputs[task.id] || ""} onChange={e => setNewSubtaskInputs(prev => ({ ...prev, [task.id]: e.target.value }))} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleAddSubtask(task); } }} placeholder="+ Sub-tugas..." className="rounded bg-slate-950 border border-slate-800 px-2 py-0.5 text-[11px] text-white" />
+                                  <button onClick={() => handleAddSubtask(task)} className="text-[11px] text-indigo-400">Tambah</button>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button onClick={() => handleUpdateTask(task, { starred: task.starred ? 0 : 1 })} className="text-amber-400">{task.starred ? '⭐' : '☆'}</button>
+                            <button onClick={() => handleDeleteEntity('task', task.id)} className="text-slate-500 hover:text-rose-400 text-xs">🗑️</button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : (
+              /* NOTES STUDIO (NOTION + OBSIDIAN) */
+              <div className="h-[calc(100vh-4rem)] flex flex-col lg:flex-row gap-5">
+                {/* Explorer */}
+                <div className="w-full lg:w-72 bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col shrink-0">
+                  <div className="flex justify-between items-center mb-3">
+                    <h3 className="font-semibold text-sm text-white">📁 Vault Catatan</h3>
+                    <button onClick={() => handleCreateNote("Halaman Baru")} className="rounded bg-indigo-600 px-2 py-1 text-xs text-white">+ Baru</button>
+                  </div>
+                  <div className="flex-1 overflow-y-auto space-y-1">
+                    {notes.map(note => (
+                      <button key={note.id} onClick={() => setSelectedNoteId(note.id)} className={`w-full text-left p-2 rounded-xl flex items-center justify-between text-xs ${selectedNoteId === note.id ? 'bg-indigo-600/20 text-indigo-300 border border-indigo-500/30' : 'text-slate-300 hover:bg-slate-800'}`}>
+                        <span className="truncate">{note.icon} {note.title}</span>
+                        {note.pinned ? <span>📌</span> : null}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Editor & Preview */}
+                <div className="flex-1 bg-slate-900 border border-slate-800 rounded-2xl p-5 flex flex-col overflow-hidden">
+                  {selectedNote ? (
+                    <>
+                      <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-800">
+                        <div className="flex items-center gap-2 flex-1">
+                          <select value={selectedNote.icon} onChange={e => handleUpdateNote({ icon: e.target.value })} className="rounded bg-slate-950 border border-slate-800 px-2 py-1 text-lg">
+                            {EMOJI_OPTIONS.map(em => <option key={em} value={em}>{em}</option>)}
+                          </select>
+                          <input type="text" value={selectedNote.title} onChange={e => handleUpdateNote({ title: e.target.value })} className="bg-transparent text-xl font-bold text-white flex-1 focus:outline-none" />
+                        </div>
+                        <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs">
+                          <button onClick={() => setNoteViewMode('split')} className={`px-2 py-1 rounded ${noteViewMode === 'split' ? 'bg-indigo-600 text-white' : 'text-slate-400'}`}>Split</button>
+                          <button onClick={() => setNoteViewMode('edit')} className={`px-2 py-1 rounded ${noteViewMode === 'edit' ? 'bg-indigo-600 text-white' : 'text-slate-400'}`}>Edit</button>
+                          <button onClick={() => setNoteViewMode('preview')} className={`px-2 py-1 rounded ${noteViewMode === 'preview' ? 'bg-indigo-600 text-white' : 'text-slate-400'}`}>Baca</button>
+                          <button onClick={() => setNoteViewMode('graph')} className={`px-2 py-1 rounded ${noteViewMode === 'graph' ? 'bg-violet-600 text-white' : 'text-slate-400'}`}>🕸️ Graph</button>
+                        </div>
+                        <button onClick={() => handleDeleteEntity('note', selectedNote.id)} className="text-slate-500 hover:text-rose-400">🗑️</button>
+                      </div>
+
+                      {noteViewMode === 'graph' ? (
+                        <div className="flex-1 flex flex-col items-center justify-center p-4">
+                          <p className="text-xs text-slate-400 mb-2">Peta Jaringan Catatan Obsidian (Tautan <code>[[WikiLink]]</code>)</p>
+                          <canvas ref={canvasRef} width={650} height={380} className="max-w-full rounded-xl bg-slate-950 border border-slate-800" />
+                        </div>
+                      ) : (
+                        <div className="flex-1 grid grid-cols-1 lg:grid-cols-2 gap-4 mt-3 overflow-hidden">
+                          {(noteViewMode === 'split' || noteViewMode === 'edit') && (
+                            <textarea value={selectedNote.content} onChange={e => handleUpdateNote({ content: e.target.value })} placeholder="Ketik Markdown atau [[Judul Catatan]]..." className={`w-full h-full bg-slate-950 border border-slate-800 rounded-xl p-4 font-mono text-xs text-slate-200 resize-none ${noteViewMode === 'edit' ? 'lg:col-span-2' : ''}`} />
+                          )}
+                          {(noteViewMode === 'split' || noteViewMode === 'preview') && (
+                            <div className={`h-full overflow-y-auto bg-slate-950/60 border border-slate-800 rounded-xl p-5 flex flex-col justify-between ${noteViewMode === 'preview' ? 'lg:col-span-2' : ''}`}>
+                              <div>{renderMarkdown(selectedNote.content)}</div>
+                              <div className="mt-8 pt-4 border-t border-slate-800">
+                                <p className="text-xs font-semibold text-slate-400 mb-1.5">🔗 Backlinks ({backlinks.length}):</p>
+                                <div className="flex flex-wrap gap-2">
+                                  {backlinks.map(bl => (
+                                    <button key={bl.id} onClick={() => setSelectedNoteId(bl.id)} className="rounded bg-slate-900 border border-slate-700 px-2 py-1 text-xs text-indigo-300">{bl.icon} {bl.title}</button>
+                                  ))}
+                                  {backlinks.length === 0 && <span className="text-[11px] text-slate-500">Belum ada catatan yang menautkan ke halaman ini.</span>}
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <div className="flex-1 flex items-center justify-center text-sm text-slate-500">Pilih catatan di sisi kiri.</div>
+                  )}
+                </div>
+              </div>
+            )}
+          </main>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
